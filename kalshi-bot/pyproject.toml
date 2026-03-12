@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kalshi-bot"
+version = "0.1.0"
+description = "Kalshi-only bot architecture scaffold"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Kalshi Bot Team" }]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+exclude = ["tests*"]
