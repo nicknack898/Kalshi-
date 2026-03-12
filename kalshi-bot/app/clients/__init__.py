@@ -1,5 +1,3 @@
-from app.clients.kalshi_auth import KalshiAuth
-from app.clients.kalshi_rest import KalshiRESTClient
-from app.clients.kalshi_ws import KalshiWebSocketClient
+"""Client package for Kalshi HTTP/WebSocket and routing utilities."""
 
-__all__ = ["KalshiAuth", "KalshiRESTClient", "KalshiWebSocketClient"]
+__all__ = []
