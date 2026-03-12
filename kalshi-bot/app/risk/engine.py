@@ -1,113 +1,118 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterable
+
+from app.risk.kelly import edge_no, edge_yes, kelly_no, kelly_yes
+from app.schemas.risk import RiskDecision
 
 
 @dataclass(slots=True)
 class RiskConfig:
-    min_edge_dollars: Decimal = Decimal("0.01")
-    min_ev_after_costs_dollars: Decimal = Decimal("0")
-    max_kelly_fraction: Decimal = Decimal("0.25")
-    max_order_notional_dollars: Decimal = Decimal("250")
-    max_total_exposure_dollars: Decimal = Decimal("2000")
-    max_daily_loss_dollars: Decimal = Decimal("500")
-    max_drawdown_dollars: Decimal = Decimal("1500")
-    stale_state_seconds: int = 30
-    stop_file_path: str = "/tmp/KALSHI_STOP"
+    fractional_kelly: Decimal = Decimal("0.25")
+    edge_threshold: Decimal = Decimal("0.04")
+    max_single_position_pct: Decimal = Decimal("0.05")
+    max_total_open_exposure_pct: Decimal = Decimal("0.30")
+    min_expected_profit_dollars: Decimal = Decimal("5.00")
+    stop_file_path: str = "./STOP"
 
 
 @dataclass(slots=True)
 class TradeContext:
-    market_ticker: str
-    model_price_dollars: Decimal
-    order_price_dollars: Decimal
-    fees_dollars: Decimal
-    estimated_win_prob: Decimal
-    bankroll_dollars: Decimal
-    requested_notional_dollars: Decimal
-    current_total_exposure_dollars: Decimal
-    daily_pnl_dollars: Decimal
-    drawdown_dollars: Decimal
-    exchange_healthy: bool
-    state_age_seconds: int
-
-
-@dataclass(slots=True)
-class RiskDecision:
-    approved: bool
-    blockers: list[str] = field(default_factory=list)
-    max_size_dollars: Decimal = Decimal("0")
+    bankroll: Decimal
+    open_exposure: Decimal
+    max_contracts: Decimal
+    estimated_cost_per_contract: Decimal = Decimal("0")
 
 
 class RiskEngine:
-    def __init__(self, config: RiskConfig | None = None) -> None:
-        self.config = config or RiskConfig()
+    def __init__(self, config: RiskConfig) -> None:
+        self.config = config
 
-    def evaluate(self, trade: TradeContext) -> RiskDecision:
-        blockers: list[str] = []
-
+    def evaluate(self, *, side: str, p_model: Decimal, price: Decimal, context: TradeContext) -> RiskDecision:
+        reasons: list[str] = []
         if Path(self.config.stop_file_path).exists():
-            blockers.append("STOP file present")
+            reasons.append("stop_file_present")
 
-        if not trade.exchange_healthy:
-            blockers.append("Exchange health check failed")
+        if side == "yes":
+            edge = edge_yes(p_model, price)
+            k_raw = kelly_yes(p_model, price)
+        else:
+            edge = edge_no(p_model, price)
+            k_raw = kelly_no(p_model, price)
 
-        if trade.state_age_seconds > self.config.stale_state_seconds:
-            blockers.append("State is stale; fail-closed")
+        if edge < self.config.edge_threshold:
+            reasons.append("edge_below_threshold")
 
-        edge = trade.model_price_dollars - trade.order_price_dollars
-        if edge < self.config.min_edge_dollars:
-            blockers.append("Insufficient edge")
+        k_frac = max(Decimal("0"), k_raw * self.config.fractional_kelly)
+        at_risk = context.bankroll * k_frac
+        capped = min(at_risk, context.bankroll * self.config.max_single_position_pct, context.max_contracts)
 
-        gross_ev = (trade.estimated_win_prob * edge) - ((Decimal("1") - trade.estimated_win_prob) * trade.order_price_dollars)
-        ev_after_costs = gross_ev - trade.fees_dollars
-        if ev_after_costs <= self.config.min_ev_after_costs_dollars:
-            blockers.append("EV-after-costs below threshold")
+        expected_profit = edge * capped - context.estimated_cost_per_contract * capped
+        if expected_profit <= Decimal("0"):
+            reasons.append("non_positive_net_ev")
+        if expected_profit < self.config.min_expected_profit_dollars:
+            reasons.append("expected_profit_below_minimum")
 
-        b = (Decimal("1") - trade.order_price_dollars) / trade.order_price_dollars
-        p = trade.estimated_win_prob
-        q = Decimal("1") - p
-        kelly_fraction = ((b * p) - q) / b if b > 0 else Decimal("0")
-        if kelly_fraction <= 0:
-            blockers.append("Kelly sizing indicates no bet")
+        if context.open_exposure + capped > context.bankroll * self.config.max_total_open_exposure_pct:
+            reasons.append("global_exposure_cap")
 
-        capped_kelly_fraction = min(max(kelly_fraction, Decimal("0")), self.config.max_kelly_fraction)
-        kelly_size_dollars = trade.bankroll_dollars * capped_kelly_fraction
-
-        if trade.requested_notional_dollars > self.config.max_order_notional_dollars:
-            blockers.append("Order exceeds per-order exposure cap")
-
-        projected_exposure = trade.current_total_exposure_dollars + trade.requested_notional_dollars
-        if projected_exposure > self.config.max_total_exposure_dollars:
-            blockers.append("Order exceeds total exposure cap")
-
-        if trade.daily_pnl_dollars <= -self.config.max_daily_loss_dollars:
-            blockers.append("Daily loss limit breached")
-
-        if trade.drawdown_dollars >= self.config.max_drawdown_dollars:
-            blockers.append("Max drawdown breached")
-
-        max_size = min(
-            self.config.max_order_notional_dollars,
-            max(kelly_size_dollars, Decimal("0")),
+        approved = len(reasons) == 0
+        return RiskDecision(
+            approved=approved,
+            side=side,
+            size_fp=capped if approved else Decimal("0"),
+            limit_price_dollars=price,
+            max_price_dollars=price,
+            reason_codes=reasons,
+            kelly_raw=k_raw,
+            kelly_fractional=k_frac,
+            risk_snapshot={"edge": str(edge), "expected_profit": str(expected_profit)},
         )
-        return RiskDecision(approved=not blockers, blockers=blockers, max_size_dollars=max_size)
 
-    def assert_approved(self, trade: TradeContext) -> RiskDecision:
-        decision = self.evaluate(trade)
-        if not decision.approved:
-            joined = "; ".join(decision.blockers)
-            raise PermissionError(f"Risk check failed: {joined}")
-        return decision
 
-    @staticmethod
-    def summarize_blockers(decision: RiskDecision) -> str:
-        return ", ".join(decision.blockers) if decision.blockers else "none"
+# Backward-compatible helper
 
-    @staticmethod
-    def has_critical_blockers(decision: RiskDecision, patterns: Iterable[str]) -> bool:
-        blockers = " ".join(decision.blockers).lower()
-        return any(token.lower() in blockers for token in patterns)
+def evaluate_buy(
+    *,
+    side: str,
+    p_model: Decimal,
+    price: Decimal,
+    bankroll: Decimal,
+    max_contracts: Decimal,
+    estimated_cost_per_contract: Decimal,
+    context,
+) -> RiskDecision:
+    cfg = RiskConfig(
+        fractional_kelly=context.fractional_kelly,
+        edge_threshold=context.edge_threshold,
+        max_single_position_pct=context.max_single_position_pct,
+        max_total_open_exposure_pct=context.max_total_open_exposure_pct,
+        min_expected_profit_dollars=context.min_expected_profit_dollars,
+        stop_file_path=context.stop_file_path,
+    )
+    engine = RiskEngine(cfg)
+    return engine.evaluate(
+        side=side,
+        p_model=p_model,
+        price=price,
+        context=TradeContext(
+            bankroll=bankroll,
+            open_exposure=context.open_exposure,
+            max_contracts=max_contracts,
+            estimated_cost_per_contract=estimated_cost_per_contract,
+        ),
+    )
+
+
+@dataclass
+class RiskContext:
+    bankroll: Decimal
+    open_exposure: Decimal
+    max_single_position_pct: Decimal
+    max_total_open_exposure_pct: Decimal
+    fractional_kelly: Decimal
+    edge_threshold: Decimal
+    min_expected_profit_dollars: Decimal
+    stop_file_path: str
