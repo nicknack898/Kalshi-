@@ -61,3 +61,23 @@ class KalshiRESTClient:
 
     async def list_open_orders(self) -> dict[str, Any]:
         return await self.request("GET", "/trade-api/v2/portfolio/orders", params={"status": "open"})
+    async def paginate(
+        self,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        items_key: str = "markets",
+        cursor_key: str = "cursor",
+        next_cursor_key: str = "next_cursor",
+    ) -> list[dict[str, Any]]:
+        query = dict(params or {})
+        all_items: list[dict[str, Any]] = []
+        while True:
+            page = await self.request("GET", path, params=query)
+            all_items.extend(page.get(items_key, []))
+            next_cursor = page.get(next_cursor_key)
+            if not next_cursor:
+                break
+            query[cursor_key] = next_cursor
+        return all_items
+
