@@ -1,43 +1,52 @@
 from decimal import Decimal
 
-from app.risk.engine import RiskConfig, RiskEngine, TradeContext
+from app.risk.engine import RiskContext, evaluate_buy
 
 
-def _trade(**overrides):
-    base = dict(
-        market_ticker="TEST",
-        model_price_dollars=Decimal("0.60"),
-        order_price_dollars=Decimal("0.30"),
-        fees_dollars=Decimal("0.001"),
-        estimated_win_prob=Decimal("0.75"),
-        bankroll_dollars=Decimal("1000"),
-        requested_notional_dollars=Decimal("50"),
-        current_total_exposure_dollars=Decimal("100"),
-        daily_pnl_dollars=Decimal("100"),
-        drawdown_dollars=Decimal("50"),
-        exchange_healthy=True,
-        state_age_seconds=1,
+def test_risk_approves_positive_ev(tmp_path) -> None:
+    context = RiskContext(
+        bankroll=Decimal("1000"),
+        open_exposure=Decimal("0"),
+        max_single_position_pct=Decimal("0.05"),
+        max_total_open_exposure_pct=Decimal("0.30"),
+        fractional_kelly=Decimal("0.25"),
+        edge_threshold=Decimal("0.04"),
+        min_expected_profit_dollars=Decimal("1"),
+        stop_file_path=str(tmp_path / "STOP"),
     )
-    base.update(overrides)
-    return TradeContext(**base)
-
-
-def test_ev_and_kelly_generate_positive_approval() -> None:
-    engine = RiskEngine(RiskConfig())
-    decision = engine.evaluate(_trade())
-    assert decision.approved is True
-    assert decision.max_size_dollars > Decimal("0")
-
-
-def test_risk_limits_block_when_exposure_and_losses_breach() -> None:
-    engine = RiskEngine(RiskConfig(max_total_exposure_dollars=Decimal("120"), max_daily_loss_dollars=Decimal("10")))
-    decision = engine.evaluate(
-        _trade(
-            current_total_exposure_dollars=Decimal("100"),
-            requested_notional_dollars=Decimal("30"),
-            daily_pnl_dollars=Decimal("-15"),
-        )
+    decision = evaluate_buy(
+        side="yes",
+        p_model=Decimal("0.60"),
+        price=Decimal("0.50"),
+        bankroll=Decimal("1000"),
+        max_contracts=Decimal("100"),
+        estimated_cost_per_contract=Decimal("0.01"),
+        context=context,
     )
-    assert decision.approved is False
-    assert "Order exceeds total exposure cap" in decision.blockers
-    assert "Daily loss limit breached" in decision.blockers
+    assert decision.approved
+
+
+def test_risk_blocks_stop_file(tmp_path) -> None:
+    stop = tmp_path / "STOP"
+    stop.write_text("halt")
+    context = RiskContext(
+        bankroll=Decimal("1000"),
+        open_exposure=Decimal("0"),
+        max_single_position_pct=Decimal("0.05"),
+        max_total_open_exposure_pct=Decimal("0.30"),
+        fractional_kelly=Decimal("0.25"),
+        edge_threshold=Decimal("0.04"),
+        min_expected_profit_dollars=Decimal("1"),
+        stop_file_path=str(stop),
+    )
+    decision = evaluate_buy(
+        side="yes",
+        p_model=Decimal("0.60"),
+        price=Decimal("0.50"),
+        bankroll=Decimal("1000"),
+        max_contracts=Decimal("100"),
+        estimated_cost_per_contract=Decimal("0.01"),
+        context=context,
+    )
+    assert not decision.approved
+    assert "stop_file_present" in decision.reason_codes

@@ -1,42 +1,28 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from typing import Any, AsyncIterator
+import time
+from collections.abc import Iterable
 
 import websockets
-from websockets.asyncio.client import ClientConnection
 
 from app.clients.kalshi_auth import KalshiAuth
+from app.constants import DEMO_WS_BASE, PROD_WS_BASE
 
 
-@dataclass(slots=True)
-class KalshiWebSocketClient:
-    ws_url: str
-    auth: KalshiAuth
-
-    def _auth_headers(self) -> dict[str, str]:
-        return self.auth.sign("GET", "/trade-api/ws/v2")
-
-    async def connect(self) -> ClientConnection:
-        return await websockets.connect(self.ws_url, additional_headers=self._auth_headers())
-
-    async def subscribe(
+class KalshiWsClient:
+    def __init__(
         self,
-        conn: ClientConnection,
         *,
-        channels: list[str],
-        market_tickers: list[str] | None = None,
+        env: str = "demo",
+        api_key_id: str,
+        signing_key: str,
     ) -> None:
-        msg: dict[str, Any] = {
-            "id": 1,
-            "cmd": "subscribe",
-            "params": {"channels": channels},
-        }
-        if market_tickers:
-            msg["params"]["market_tickers"] = market_tickers
-        await conn.send(json.dumps(msg))
+        self.url = DEMO_WS_BASE if env == "demo" else PROD_WS_BASE
+        self.auth = KalshiAuth(access_key=api_key_id, signing_key=signing_key)
 
-    async def stream_messages(self, conn: ClientConnection) -> AsyncIterator[dict[str, Any]]:
-        async for raw in conn:
-            yield json.loads(raw)
+    async def connect_and_subscribe(self, channels: Iterable[str]) -> None:
+        timestamp_ms = int(time.time() * 1000)
+        headers = self.auth.sign("GET", "/trade-api/ws/v2", timestamp_ms=timestamp_ms)
+        async with websockets.connect(self.url, additional_headers=headers) as websocket:
+            await websocket.send(json.dumps({"type": "subscribe", "channels": list(channels)}))
