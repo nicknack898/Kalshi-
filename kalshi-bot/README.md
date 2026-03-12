@@ -1,27 +1,20 @@
-# Kalshi Bot
+# Kalshi-only Prediction Market Trading Bot
 
-Kalshi-only trading bot project scaffold.
+Kalshi-only, demo-first trading bot scaffold focused on deterministic risk controls, fixed-point data handling, and limit-order execution.
 
-## Structure
+## Safety Defaults
+- `ENABLE_LIVE_TRADING=false`
+- `PLACE_REAL_ORDERS=false`
+- `KALSHI_ENV=demo`
+- fail-closed behavior on ambiguous config and risk blockers
 
-- `app/` — Python application package.
-  - `clients/`
-  - `schemas/`
-  - `scanner/`
-  - `research/`
-  - `forecast/`
-  - `risk/`
-  - `execution/`
-  - `portfolio/`
-  - `backtest/`
-  - `learning/`
-  - `ops/`
-  - `db/`
-- `tests/` — Test suite package.
-- `docs/` — Project documentation.
-- `migrations/` — Alembic migrations.
-- `.env.example` — Environment variable template.
-- `pyproject.toml` — Python project metadata.
-- `alembic.ini` — Alembic configuration.
+## Run
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e .[dev]
+pytest
+```
 
-This scaffold intentionally keeps architecture Kalshi-only and does not introduce multi-exchange abstractions.
+## Scope
+This repository intentionally excludes Polymarket, Polygon, wallets, and cross-exchange abstractions.
