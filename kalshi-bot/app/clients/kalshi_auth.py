@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
-import time
 from dataclasses import dataclass
-from hashlib import sha256
-from urllib.parse import urlsplit
+from pathlib import Path
+
+
+@dataclass(slots=True)
+class SignedHeaders:
+    key: str
+    timestamp: str
+    signature: str
 
 
 @dataclass(slots=True)
@@ -13,20 +19,53 @@ class KalshiAuth:
     access_key: str
     signing_key: str
 
-    def _signature_payload(self, method: str, url_or_path: str, timestamp_ms: int) -> str:
-        path = urlsplit(url_or_path).path if "://" in url_or_path else url_or_path
-        return f"{timestamp_ms}{method.upper()}{path}"
-
-    def sign(self, method: str, url_or_path: str, timestamp_ms: int | None = None) -> dict[str, str]:
-        ts = int(time.time() * 1000) if timestamp_ms is None else int(timestamp_ms)
-        payload = self._signature_payload(method, url_or_path, ts)
-        signature = hmac.new(
-            self.signing_key.encode("utf-8"), payload.encode("utf-8"), sha256
-        ).digest()
-        b64_signature = base64.b64encode(signature).decode("utf-8")
-
+    def sign(self, method: str, path: str, *, timestamp_ms: int) -> dict[str, str]:
+        if not self.access_key or not self.signing_key:
+            raise ValueError("Fail closed: Kalshi access key and signing key are required")
+        signature = sign_request(
+            timestamp=str(timestamp_ms),
+            method=method,
+            path=path,
+            signing_key=self.signing_key,
+        )
         return {
             "KALSHI-ACCESS-KEY": self.access_key,
-            "KALSHI-ACCESS-TIMESTAMP": str(ts),
-            "KALSHI-ACCESS-SIGNATURE": b64_signature,
+            "KALSHI-ACCESS-TIMESTAMP": str(timestamp_ms),
+            "KALSHI-ACCESS-SIGNATURE": signature,
         }
+
+
+def build_signature_payload(timestamp: str, method: str, path: str) -> str:
+    normalized_path = path.split("?", 1)[0]
+    return f"{timestamp}{method.upper()}{normalized_path}"
+
+
+def sign_request(
+    *,
+    timestamp: str,
+    method: str,
+    path: str,
+    signing_key: str | None = None,
+    private_key_path: str | None = None,
+) -> str:
+    payload = build_signature_payload(timestamp, method, path).encode("utf-8")
+    if signing_key is None:
+        if private_key_path is None:
+            raise ValueError("Either signing_key or private_key_path must be provided")
+        signing_key = Path(private_key_path).read_text(encoding="utf-8")
+
+    return base64.b64encode(
+        hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+
+def build_auth_headers(
+    *, key_id: str, timestamp: str, method: str, path: str, private_key_path: str
+) -> SignedHeaders:
+    signature = sign_request(
+        timestamp=timestamp,
+        method=method,
+        path=path,
+        private_key_path=private_key_path,
+    )
+    return SignedHeaders(key=key_id, timestamp=timestamp, signature=signature)
