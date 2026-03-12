@@ -8,11 +8,20 @@ from pathlib import Path
 
 
 @dataclass(slots=True)
+class SignedHeaders:
+    key: str
+    timestamp: str
+    signature: str
+
+
+@dataclass(slots=True)
 class KalshiAuth:
     access_key: str
     signing_key: str
 
     def sign(self, method: str, path: str, *, timestamp_ms: int) -> dict[str, str]:
+        if not self.access_key or not self.signing_key:
+            raise ValueError("Fail closed: Kalshi access key and signing key are required")
         signature = sign_request(
             timestamp=str(timestamp_ms),
             method=method,
@@ -27,6 +36,18 @@ class KalshiAuth:
 
 
 def build_signature_payload(timestamp: str, method: str, path: str) -> str:
+    normalized_path = path.split("?", 1)[0]
+    return f"{timestamp}{method.upper()}{normalized_path}"
+
+
+def sign_request(
+    *,
+    timestamp: str,
+    method: str,
+    path: str,
+    signing_key: str | None = None,
+    private_key_path: str | None = None,
+) -> str:
     return f"{timestamp}{method.upper()}{path.split('?', 1)[0]}"
 
 
@@ -35,5 +56,22 @@ def sign_request(*, timestamp: str, method: str, path: str, signing_key: str | N
     if signing_key is None:
         if private_key_path is None:
             raise ValueError("Either signing_key or private_key_path must be provided")
+        signing_key = Path(private_key_path).read_text(encoding="utf-8")
+
+    return base64.b64encode(
+        hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).digest()
+    ).decode("utf-8")
+
+
+def build_auth_headers(
+    *, key_id: str, timestamp: str, method: str, path: str, private_key_path: str
+) -> SignedHeaders:
+    signature = sign_request(
+        timestamp=timestamp,
+        method=method,
+        path=path,
+        private_key_path=private_key_path,
+    )
+    return SignedHeaders(key=key_id, timestamp=timestamp, signature=signature)
         signing_key = Path(private_key_path).read_text()
     return base64.b64encode(hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).digest()).decode("utf-8")

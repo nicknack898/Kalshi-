@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pytest
+
+from app.clients.kalshi_auth import KalshiAuth, build_auth_headers, build_signature_payload, sign_request
 from app.clients.kalshi_auth import build_signature_payload, sign_request
 
 
@@ -14,3 +17,25 @@ def test_sign_request_is_deterministic(tmp_path: Path) -> None:
     s1 = sign_request(timestamp="1", method="GET", path="/markets", private_key_path=str(key))
     s2 = sign_request(timestamp="1", method="GET", path="/markets", private_key_path=str(key))
     assert s1 == s2
+
+
+def test_build_auth_headers_from_private_key(tmp_path: Path) -> None:
+    key = tmp_path / "key.pem"
+    key.write_text("private-signing-key")
+
+    headers = build_auth_headers(
+        key_id="kid",
+        timestamp="123",
+        method="GET",
+        path="/markets?cursor=x",
+        private_key_path=str(key),
+    )
+    assert headers.key == "kid"
+    assert headers.timestamp == "123"
+    assert headers.signature
+
+
+def test_sign_fails_closed_with_missing_credentials() -> None:
+    auth = KalshiAuth(access_key="", signing_key="")
+    with pytest.raises(ValueError):
+        auth.sign("GET", "/markets", timestamp_ms=123)
