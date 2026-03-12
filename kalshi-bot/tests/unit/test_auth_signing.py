@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from app.clients.kalshi_auth import KalshiAuth, build_auth_headers, build_signature_payload, sign_request
+from app.clients.kalshi_auth import build_signature_payload, sign_request
 
 
 def test_signature_payload_excludes_query() -> None:

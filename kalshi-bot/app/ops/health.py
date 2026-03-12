@@ -33,3 +33,4 @@ async def fetch_exchange_health(rest_client: KalshiRESTClient) -> ExchangeHealth
         in_maintenance=in_maintenance,
         status=status,
     )
+"""Module scaffold."""

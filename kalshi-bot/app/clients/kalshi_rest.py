@@ -4,7 +4,6 @@ import asyncio
 import time
 from typing import Any
 
-import httpx
 
 from app.clients.kalshi_auth import KalshiAuth
 from app.constants import DEMO_REST_BASE, PROD_REST_BASE
@@ -25,6 +24,10 @@ class KalshiRESTClient:
         self.auth = auth or KalshiAuth(access_key=api_key_id or "", signing_key=signing_key or "")
         self._client = httpx.AsyncClient(timeout=timeout_seconds)
 
+class KalshiRESTClient:
+    def __init__(self, base_url: str, auth: Any) -> None:
+        self.base_url = base_url
+        self.auth = auth
         post_init = getattr(self, "__post_init__", None)
         if callable(post_init):
             post_init()
@@ -67,6 +70,8 @@ class KalshiRESTClient:
                 delay = min(delay * 2, 2.0)
 
         raise RuntimeError("unreachable")
+    async def request(self, method: str, path: str, *, params: dict[str, Any] | None = None, json: dict[str, Any] | None = None) -> dict[str, Any]:
+        raise NotImplementedError
 
     async def paginate(self, path: str, *, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         merged = dict(params or {})
@@ -99,3 +104,13 @@ class KalshiRESTClient:
 
 # Backward-compatible alias used by earlier modules.
 KalshiRestClient = KalshiRESTClient
+        while True:
+            page_params = dict(merged)
+            if cursor is not None:
+                page_params["cursor"] = cursor
+            payload = await self.request("GET", path, params=page_params)
+            out.extend(payload.get("markets", []))
+            cursor = payload.get("next_cursor")
+            if not cursor:
+                break
+        return out

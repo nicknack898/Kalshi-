@@ -48,6 +48,10 @@ def sign_request(
     signing_key: str | None = None,
     private_key_path: str | None = None,
 ) -> str:
+    return f"{timestamp}{method.upper()}{path.split('?', 1)[0]}"
+
+
+def sign_request(*, timestamp: str, method: str, path: str, signing_key: str | None = None, private_key_path: str | None = None) -> str:
     payload = build_signature_payload(timestamp, method, path).encode("utf-8")
     if signing_key is None:
         if private_key_path is None:
@@ -69,3 +73,5 @@ def build_auth_headers(
         private_key_path=private_key_path,
     )
     return SignedHeaders(key=key_id, timestamp=timestamp, signature=signature)
+        signing_key = Path(private_key_path).read_text()
+    return base64.b64encode(hmac.new(signing_key.encode("utf-8"), payload, hashlib.sha256).digest()).decode("utf-8")
